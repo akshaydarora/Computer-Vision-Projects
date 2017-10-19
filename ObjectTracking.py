@@ -1,88 +1,67 @@
-#Object Tracking
-import cv2
 import numpy as np
+import cv2
 
-# Initalize camera
+# Initialize webcam
 cap = cv2.VideoCapture(0)
 
-# define range of purple color in HSV
-lower_purple = np.array([130,50,90])
-upper_purple = np.array([170,255,255])
-
-# Create empty points array
-points = []
-
-# Get default camera window size
+# take first frame of the video
 ret, frame = cap.read()
-Height, Width = frame.shape[:2]
-frame_count = 0
+
+# setup default location of window
+r, h, c, w = 240, 100, 400, 160 
+track_window = (c, r, w, h)
+
+# Crop region of interest for tracking
+roi = frame[r:r+h, c:c+w]
+
+# Convert cropped window to HSV color space
+hsv_roi =  cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+# Create a mask between the HSV bounds
+lower_purple = np.array([130,60,60])
+upper_purple = np.array([175,255,255])
+mask = cv2.inRange(hsv_roi, lower_purple, upper_purple)
+
+# Obtain the color histogram of the ROI
+roi_hist = cv2.calcHist([hsv_roi], [0], mask, [180], [0,180])
+
+# Normalize values to lie between the range 0, 255
+cv2.normalize(roi_hist, roi_hist, 0, 255, cv2.NORM_MINMAX)
+
+# Setup the termination criteria
+# We stop calculating the centroid shift after ten iterations 
+# or if the centroid has moved at least 1 pixel
+term_crit = ( cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 1 )
 
 while True:
-
-    # Capture webcame frame
+    
+    # Read webcam frame
     ret, frame = cap.read()
-    hsv_img = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-    # Threshold the HSV image to get only blue colors
-    mask = cv2.inRange(hsv_img, lower_purple, upper_purple)
-    #mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    
-    # Find contours, OpenCV 3.X users use this line instead
-    #  _, contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    # Create empty centre array to store centroid center of mass
-    center =   int(Height/2), int(Width/2)
-
-    if len(contours) > 0:
+    if ret == True:
+        # Convert to HSV
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         
-        # Get the largest contour and its center 
-        c = max(contours, key=cv2.contourArea)
-        (x, y), radius = cv2.minEnclosingCircle(c)
-        M = cv2.moments(c)
-        try:
-            center = (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
+        # Calculate the histogram back projection 
+        # Each pixel's value is it's probability
+        dst = cv2.calcBackProject([hsv],[0],roi_hist,[0,180],1)
 
-        except:
-            center =   int(Height/2), int(Width/2)
+        # apply Camshift to get the new location
+        ret, track_window = cv2.CamShift(dst, track_window, term_crit)
 
-        # Allow only countors that have a larger than 15 pixel radius
-        if radius > 25:
-            
-            # Draw cirlce and leave the last center creating a trail
-            cv2.circle(frame, (int(x), int(y)), int(radius),(0, 0, 255), 2)
-            cv2.circle(frame, center, 5, (0, 255, 0), -1)
-            
-    # Log center points 
-    points.append(center)
-    
-    # loop over the set of tracked points
-    if radius > 25:
-        for i in range(1, len(points)):
-            try:
-                cv2.line(frame, points[i - 1], points[i], (0, 255, 0), 2)
-            except:
-                pass
-            
-        # Make frame count zero
-        frame_count = 0
+        # Draw it on image 
+        # We use polylines to represent Adaptive box 
+        pts = cv2.boxPoints(ret)
+        pts = np.int0(pts)
+        img2 = cv2.polylines(frame,[pts],True, 255,2)
+        
+        cv2.imshow('Camshift Tracking', img2)
+        
+        if cv2.waitKey(1) == 13: #13 is the Enter Key
+            break
+
     else:
-        # Count frames 
-        frame_count += 1
-        
-        # If we count 10 frames without object lets delete our trail
-        if frame_count == 10:
-            points = []
-            # when frame_count reaches 20 let's clear our trail 
-            frame_count = 0
-            
-    # Display our object tracker
-    frame = cv2.flip(frame, 1)
-    cv2.imshow("Object Tracker", frame)
-
-    if cv2.waitKey(1) == 13: #13 is the Enter Key
         break
 
-# Release camera and close any open windows
-cap.release()
 cv2.destroyAllWindows()
+cap.release()
